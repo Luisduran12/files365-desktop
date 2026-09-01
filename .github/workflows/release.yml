@@ -63,23 +63,45 @@ jobs:
         # is exported explicitly so pkg_check_modules(libp11) can find the
         # .pc file Homebrew installs, without relying on shell init scripts
         # a CI shell doesn't source.
+        # BUILD_TESTING=OFF: CPack's preinstall step (see Package step below)
+        # depends on CMake's "all" target, which would otherwise also compile
+        # the unit test binaries - unnecessary for a release package and a
+        # second source of failures inside a step whose real error only ever
+        # surfaces in PreinstallOutput.log.
         run: |
           export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig:$PKG_CONFIG_PATH"
           cmake -S . -B build \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DBUILD_OWNCLOUD_OSX_BUNDLE=ON \
+                -DBUILD_TESTING=OFF \
                 -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
                 -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
                 -DFILES365_RELEASE_VERSION=${{ steps.ver.outputs.version }}
 
       - name: Build
-        run: cmake --build build --target nextcloud -j "$(sysctl -n hw.ncpu)"
+        # Must build nextcloudcmd alongside nextcloud, not just nextcloud:
+        # src/gui/CMakeLists.txt runs macdeployqt as a POST_BUILD step on the
+        # "nextcloud" target with "-executable=.../files365cmd" pointing at
+        # nextcloudcmd's output binary. If nextcloudcmd was never built, that
+        # path doesn't exist yet, so macdeployqt's rpath fixups on it fail
+        # (logged as "install_name_tool: can't open file" - non-fatal to the
+        # step, but leaves the bundle inconsistent). Worse, CPack's preinstall
+        # target then depends on CMake's "all" target and builds nextcloudcmd
+        # for the first time *during* packaging, which is what was actually
+        # failing "Package (.dmg via CPack)" (see PreinstallOutput.log).
+        # Building both up front makes the bundle correct and leaves nothing
+        # left for preinstall to build.
+        run: cmake --build build --target nextcloud --target nextcloudcmd -j "$(sysctl -n hw.ncpu)"
 
       - name: Package (.dmg via CPack)
         run: |
           cd build
           cpack -D CPACK_PACKAGE_VERSION=${{ steps.ver.outputs.version }} \
                 -D "CPACK_PACKAGE_FILE_NAME=Files365-${{ steps.ver.outputs.version }}-macOS"
+
+      - name: Show preinstall log on failure
+        if: failure()
+        run: cat build/_CPack_Packages/unused/DragNDrop/PreinstallOutput.log
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -151,6 +173,25 @@ jobs:
           craft craft
           craft --install-deps nextcloud-client
           craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} nextcloud-client
+
+          # Upstream bug workaround: craft-blueprints-nextcloud@stable-34.0's
+          # nextcloud-client.py calls os.path.join() in createPackage() but
+          # never imports the os module, so "craft --package" always crashes
+          # with "NameError: name 'os' is not defined" right after the actual
+          # packaging work has already succeeded. Patch it in place until
+          # upstream fixes it (or a newer blueprint tag/branch is pinned).
+          $blueprintFile = "${{ env.CRAFT_TARGET }}\etc\blueprints\locations\craft-blueprints-nextcloud\nextcloud-client\nextcloud-client.py"
+          if (Test-Path $blueprintFile) {
+              $content = Get-Content $blueprintFile -Raw
+              if ($content -notmatch '(?m)^import os$') {
+                  $content = $content -replace '(?m)^import info$', "import info`nimport os"
+                  Set-Content -Path $blueprintFile -Value $content -NoNewline
+              }
+          } else {
+              Write-Error "Expected blueprint file not found at $blueprintFile - craft-blueprints-nextcloud layout may have changed, os.path.join() NameError workaround needs updating"
+              exit 1
+          }
+
           craft --package nextcloud-client
 
       - name: Collect installer(s)
