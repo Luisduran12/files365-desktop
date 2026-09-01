@@ -56,10 +56,16 @@ jobs:
           sudo cmake --install /tmp/kdsingleapplication/build
 
       - name: Configure
+        # macos-latest is Apple Silicon: Homebrew lives at /opt/homebrew, not
+        # /usr/local, so CMAKE_PREFIX_PATH must be passed explicitly.
+        # openssl@3 is keg-only (never symlinked into the main prefix on
+        # either architecture) so it needs its own hint too.
         run: |
           cmake -S . -B build \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DBUILD_OWNCLOUD_OSX_BUNDLE=ON \
+                -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
+                -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
                 -DFILES365_RELEASE_VERSION=${{ steps.ver.outputs.version }}
 
       - name: Build
@@ -80,7 +86,12 @@ jobs:
 
   build-windows:
     name: Windows (installer)
-    runs-on: windows-latest
+    # Pinned (not windows-latest): as of this writing windows-latest points
+    # to Windows Server 2025 / Visual Studio 2026, which Craft's
+    # windows-msvc2022_64-cl target below does not detect. windows-2022
+    # ships VS2022, matching CRAFT_TARGET - same pin already used by
+    # windows-build-and-test.yml elsewhere in this repo.
+    runs-on: windows-2022
     continue-on-error: true
     timeout-minutes: 90
     env:
@@ -105,6 +116,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
+
+      - name: Setup MSVC dev environment
+        # Puts cl.exe/link.exe etc. on PATH (via GITHUB_ENV/GITHUB_PATH) so
+        # every later step's shell inherits it - Craft's Visual Studio
+        # detection needs this active before it runs.
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
 
       - name: Setup Craft, install deps, compile and package
         shell: pwsh
