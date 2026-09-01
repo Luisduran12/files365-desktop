@@ -68,12 +68,21 @@ jobs:
         # the unit test binaries - unnecessary for a release package and a
         # second source of failures inside a step whose real error only ever
         # surfaces in PreinstallOutput.log.
+        # CMAKE_OSX_ARCHITECTURES=arm64: shell_integration/MacOSX/CMakeLists.txt
+        # shells out to `xcodebuild ARCHS=${CMAKE_OSX_ARCHITECTURES} ...` to
+        # build the Finder Sync extension. Left unset, that expands to
+        # "ARCHS=" (empty), so Xcode builds for zero architectures and every
+        # binary it was supposed to produce is silently missing - which is
+        # what preinstall's FinderSyncBroker/FinderSyncExt build actually
+        # failed on ("Build input file cannot be found", "no architectures to
+        # compile for"). macos-latest is Apple Silicon, hence arm64.
         run: |
           export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig:$PKG_CONFIG_PATH"
           cmake -S . -B build \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DBUILD_OWNCLOUD_OSX_BUNDLE=ON \
                 -DBUILD_TESTING=OFF \
+                -DCMAKE_OSX_ARCHITECTURES=arm64 \
                 -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
                 -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
                 -DFILES365_RELEASE_VERSION=${{ steps.ver.outputs.version }}
@@ -158,6 +167,30 @@ jobs:
         shell: pwsh
         run: choco install inkscape --no-progress
 
+      - name: Work around craft-blueprints-nextcloud os.path.join() NameError
+        # craft-blueprints-nextcloud@stable-34.0's nextcloud-client.py calls
+        # os.path.join() in createPackage() without importing the os module,
+        # so "craft --package" always crashes with "NameError: name 'os' is
+        # not defined" right after the actual packaging work has already
+        # succeeded. Patching the checked-out blueprint file directly doesn't
+        # stick: every single CraftMaster invocation resets its blueprint
+        # repos' working trees (confirmed - each of the six `craft ...` calls
+        # below prints a "HEAD is now at ..." checkout), which wipes any local
+        # edit before "craft --package" runs. Instead, inject a sitecustomize
+        # module that makes the standard `os` module resolve as a builtin, so
+        # bare `os.path.join(...)` succeeds even in a module that forgot to
+        # import it - this survives blueprint resets since it lives outside
+        # the blueprint checkout entirely. Remove once upstream fixes it.
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\_ci_sitecustomize" | Out-Null
+          Set-Content -Path "${{ github.workspace }}\_ci_sitecustomize\sitecustomize.py" -Value @'
+import builtins
+import os
+builtins.os = os
+'@
+          Add-Content -Path $env:GITHUB_ENV -Value "PYTHONPATH=${{ github.workspace }}\_ci_sitecustomize"
+
       - name: Setup Craft, install deps, compile and package
         shell: pwsh
         run: |
@@ -173,25 +206,6 @@ jobs:
           craft craft
           craft --install-deps nextcloud-client
           craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} nextcloud-client
-
-          # Upstream bug workaround: craft-blueprints-nextcloud@stable-34.0's
-          # nextcloud-client.py calls os.path.join() in createPackage() but
-          # never imports the os module, so "craft --package" always crashes
-          # with "NameError: name 'os' is not defined" right after the actual
-          # packaging work has already succeeded. Patch it in place until
-          # upstream fixes it (or a newer blueprint tag/branch is pinned).
-          $blueprintFile = "${{ env.CRAFT_TARGET }}\etc\blueprints\locations\craft-blueprints-nextcloud\nextcloud-client\nextcloud-client.py"
-          if (Test-Path $blueprintFile) {
-              $content = Get-Content $blueprintFile -Raw
-              if ($content -notmatch '(?m)^import os$') {
-                  $content = $content -replace '(?m)^import info$', "import info`nimport os"
-                  Set-Content -Path $blueprintFile -Value $content -NoNewline
-              }
-          } else {
-              Write-Error "Expected blueprint file not found at $blueprintFile - craft-blueprints-nextcloud layout may have changed, os.path.join() NameError workaround needs updating"
-              exit 1
-          }
-
           craft --package nextcloud-client
 
       - name: Collect installer(s)
