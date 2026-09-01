@@ -19,7 +19,15 @@ endif()
 set( APPLICATION_CONFIG_NAME "${APPLICATION_EXECUTABLE}" )
 set( APPLICATION_DOMAIN     "files365.com" )
 set( APPLICATION_VENDOR     "Files365" )
-set( APPLICATION_UPDATE_URL "https://updates.files365.com/client/" CACHE STRING "URL for updater" )
+# ---------------------------------------------------------------------------
+# Files365 update server
+#
+# This is the ONLY place to change once you have your own update server.
+# See docs/SERVER_SETUP.md for what this server must serve (endpoints,
+# response format, and how to test it before shipping).
+# ---------------------------------------------------------------------------
+set( FILES365_UPDATE_URL "https://updates.files365.example.com" CACHE STRING "Files365 update server base URL - change this to your real server" )
+set( APPLICATION_UPDATE_URL "${FILES365_UPDATE_URL}" CACHE STRING "URL for updater" FORCE )
 set( APPLICATION_HELP_URL   "" CACHE STRING "URL for the help menu" )
 
 # Default macOS builds (Nextcloud + NextcloudDev) use the Icon Composer (.icon)

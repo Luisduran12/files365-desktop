@@ -4,10 +4,34 @@
 
 # ------------------------------------
 # Version information
+#
+# The release workflow (.github/workflows/release.yml) passes
+# -DFILES365_RELEASE_VERSION=X.Y.Z, derived from the pushed git tag
+# (e.g. tag "v1.0.0" -> "1.0.0"). Manual/local/dev builds that don't
+# pass it fall back to version 0.0.0-dev.
 # ------------------------------------
-set(MIRALL_VERSION_MAJOR 34)
-set(MIRALL_VERSION_MINOR 0)
-set(MIRALL_VERSION_PATCH 50)
+if(DEFINED FILES365_RELEASE_VERSION AND NOT FILES365_RELEASE_VERSION STREQUAL "")
+    string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" _files365_ver_match "${FILES365_RELEASE_VERSION}")
+endif()
+
+if(_files365_ver_match)
+    set(MIRALL_VERSION_MAJOR ${CMAKE_MATCH_1})
+    set(MIRALL_VERSION_MINOR ${CMAKE_MATCH_2})
+    set(MIRALL_VERSION_PATCH ${CMAKE_MATCH_3})
+    if(NOT DEFINED MIRALL_VERSION_SUFFIX)
+        set(MIRALL_VERSION_SUFFIX "")
+    endif()
+else()
+    if(DEFINED FILES365_RELEASE_VERSION AND NOT FILES365_RELEASE_VERSION STREQUAL "")
+        message(WARNING "FILES365_RELEASE_VERSION '${FILES365_RELEASE_VERSION}' is not in X.Y.Z format, falling back to 0.0.0-dev")
+    endif()
+    set(MIRALL_VERSION_MAJOR 0)
+    set(MIRALL_VERSION_MINOR 0)
+    set(MIRALL_VERSION_PATCH 0)
+    if(NOT DEFINED MIRALL_VERSION_SUFFIX)
+        set(MIRALL_VERSION_SUFFIX "-dev")
+    endif()
+endif()
 set(MIRALL_VERSION_YEAR  2026)
 set(MIRALL_SOVERSION     0)
 set(MIRALL_PREVERSION_HUMAN "34.1.0 alpha")  # For preversions where PATCH>=50. Use version + alpha, rc1, rc2, etc.

@@ -1,0 +1,139 @@
+# SPDX-FileCopyrightText: 2026 Files365 contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Builds macOS (.dmg) and Windows (.exe/.msi) installers and uploads them
+# as workflow artifacts (NOT a GitHub Release - see docs/SERVER_SETUP.md
+# for the plan once a distribution server exists).
+#
+# Triggers:
+#   - push of a tag matching v*.*.* (e.g. v1.0.0)  -> version comes from the tag
+#   - manual run from the Actions tab              -> version is 0.0.0-dev
+#
+# Each platform job is independent (continue-on-error: true) so a failure
+# on one platform does not prevent the other from producing its artifact.
+
+name: Release builds
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch: {}
+
+jobs:
+  build-macos:
+    name: macOS (.dmg)
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Derive release version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies (Homebrew)
+        run: |
+          brew install qt qtkeychain extra-cmake-modules karchive sqlite openssl@3
+          brew install --cask inkscape
+
+      - name: Build and install KDSingleApplication-qt6
+        # Not a public Homebrew formula - build it from source (small, fast).
+        run: |
+          git clone --depth 1 https://github.com/KDAB/KDSingleApplication.git /tmp/kdsingleapplication
+          cmake -S /tmp/kdsingleapplication -B /tmp/kdsingleapplication/build \
+                -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/kdsingleapplication/build -j "$(sysctl -n hw.ncpu)"
+          sudo cmake --install /tmp/kdsingleapplication/build
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DBUILD_OWNCLOUD_OSX_BUNDLE=ON \
+                -DFILES365_RELEASE_VERSION=${{ steps.ver.outputs.version }}
+
+      - name: Build
+        run: cmake --build build --target nextcloud -j "$(sysctl -n hw.ncpu)"
+
+      - name: Package (.dmg via CPack)
+        run: |
+          cd build
+          cpack -D CPACK_PACKAGE_VERSION=${{ steps.ver.outputs.version }} \
+                -D "CPACK_PACKAGE_FILE_NAME=Files365-${{ steps.ver.outputs.version }}-macOS"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: files365-macos-${{ steps.ver.outputs.version }}
+          path: build/Files365-*.dmg
+          retention-days: 90
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows (installer)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 90
+    env:
+      CRAFT_TARGET: windows-msvc2022_64-cl
+      CRAFT_MASTER_LOCATION: ${{ github.workspace }}\CraftMaster
+      CRAFT_MASTER_CONFIG: ${{ github.workspace }}\craftmaster.ini
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Derive release version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup Craft, install deps, compile and package
+        shell: pwsh
+        run: |
+          git clone -q --depth=1 https://invent.kde.org/packaging/craftmaster.git ${{ env.CRAFT_MASTER_LOCATION }}
+
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+          }
+
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|stable-34.0|"
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-nextcloud.git|stable-34.0|"
+          craft craft
+          craft --install-deps nextcloud-client
+          craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} nextcloud-client
+          craft --package nextcloud-client
+
+      - name: Collect installer(s)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Get-ChildItem -Path "${{ env.CRAFT_TARGET }}" -Recurse -Include *.exe,*.msi -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "tmp|packages" } |
+            Copy-Item -Destination dist -Force
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: files365-windows-${{ steps.ver.outputs.version }}
+          path: dist/*
+          retention-days: 90
+          if-no-files-found: error
