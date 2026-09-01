@@ -43,7 +43,7 @@ jobs:
 
       - name: Install dependencies (Homebrew)
         run: |
-          brew install qt qtkeychain extra-cmake-modules karchive sqlite openssl@3
+          brew install qt qtkeychain extra-cmake-modules karchive sqlite openssl@3 libp11
           brew install --cask inkscape
 
       - name: Build and install KDSingleApplication-qt6
@@ -59,8 +59,12 @@ jobs:
         # macos-latest is Apple Silicon: Homebrew lives at /opt/homebrew, not
         # /usr/local, so CMAKE_PREFIX_PATH must be passed explicitly.
         # openssl@3 is keg-only (never symlinked into the main prefix on
-        # either architecture) so it needs its own hint too.
+        # either architecture) so it needs its own hint too. PKG_CONFIG_PATH
+        # is exported explicitly so pkg_check_modules(libp11) can find the
+        # .pc file Homebrew installs, without relying on shell init scripts
+        # a CI shell doesn't source.
         run: |
+          export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig:$PKG_CONFIG_PATH"
           cmake -S . -B build \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DBUILD_OWNCLOUD_OSX_BUNDLE=ON \
