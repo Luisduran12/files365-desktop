@@ -1,0 +1,98 @@
+# --- Build output ---
+build/
+build*/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# --- macOS app bundles / packaging ---
+*.app/
+*.dmg
+*.pkg
+*.icns.bak
+
+# --- Windows packaging ---
+*.msi
+*.ico.bak
+*.wixobj
+*.wixpdb
+
+# --- Qt / MOC / RCC / UIC generated ---
+*_autogen/
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+*.qmlc
+*.jsc
+.qt/
+.rcc/
+
+# --- OS junk ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --- Editors / IDEs ---
+.vscode/
+.idea/
+*.xcuserstate
+*.xcuserdatad/
+*.xcworkspace/xcuserdata/
+*.swp
+*.swo
+*~
+
+# --- Python (scripts/tooling) ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# --- Node (docs/tooling, if any) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# --- Credentials / secrets: never commit these ---
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.keychain
+*.keystore
+!test/**/*.pem
+id_rsa
+id_rsa.pub
+*.netrc
+secrets.json
+credentials.json
+
+# --- Logs / temp ---
+*.log
+*.tmp
+*.temp
+.cache/
