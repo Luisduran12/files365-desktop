@@ -129,6 +129,13 @@ jobs:
         with:
           arch: x64
 
+      - name: Install inkscape
+        # cmake/modules/GenerateIconsUtils.cmake find_program()s inkscape
+        # (or rsvg-convert) to rasterize the app icon SVGs at configure
+        # time - same package windows-build-and-test.yml already installs.
+        shell: pwsh
+        run: choco install inkscape --no-progress
+
       - name: Setup Craft, install deps, compile and package
         shell: pwsh
         run: |
