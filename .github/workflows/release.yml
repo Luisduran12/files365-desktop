@@ -184,11 +184,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\_ci_sitecustomize" | Out-Null
-          Set-Content -Path "${{ github.workspace }}\_ci_sitecustomize\sitecustomize.py" -Value @'
-import builtins
-import os
-builtins.os = os
-'@
+          $sitecustomize = "import builtins`nimport os`nbuiltins.os = os`n"
+          Set-Content -Path "${{ github.workspace }}\_ci_sitecustomize\sitecustomize.py" -Value $sitecustomize -NoNewline
           Add-Content -Path $env:GITHUB_ENV -Value "PYTHONPATH=${{ github.workspace }}\_ci_sitecustomize"
 
       - name: Setup Craft, install deps, compile and package
