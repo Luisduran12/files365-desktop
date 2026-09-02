@@ -203,57 +203,63 @@ jobs:
           craft craft
           craft --install-deps nextcloud-client
           craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} nextcloud-client
-          craft --package nextcloud-client
+
+          # Tee (not just run) the packaging step: craft-blueprints-nextcloud's
+          # createPackage() does NOT use this repo's NextcloudCPack.cmake/CPack
+          # NSIS config at all - it 7-zips the installed tree and feeds it
+          # through its own NSIS wrapper, then makensis prints a line of the
+          # exact form `Output: "<path>\nextcloud-client-<branch>-windows-<compiler>-<arch>.exe"`.
+          # That file name/location is Craft's own internal naming (blueprint
+          # id + branch + compiler + arch), NOT "${APPLICATION_SHORTNAME}-
+          # ${CPACK_PACKAGE_VERSION}-setup" from NextcloudCPack.cmake, and it
+          # is NOT the same directory windows-build-and-test.yml uses for
+          # ctest - confirmed by inspecting a real run's log (it lands in
+          # "...\<CRAFT_TARGET>\tmp\", not "...\build\nextcloud-client\work\build\").
+          # A previous fix here guessed at that CPack name/path from static
+          # analysis and was wrong - CPack's config in this repo is simply
+          # unused by the Craft-driven pipeline. Parsing craft's own reported
+          # "Output:" line instead of hardcoding a name/path keeps this
+          # correct even if blueprint naming (branch/compiler/arch) changes.
+          python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c --package nextcloud-client 2>&1 |
+            Tee-Object -FilePath "${{ github.workspace }}\craft-package.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Collect installer(s)
-        # BUG FIXED: the previous filter (`-Path $env:CRAFT_TARGET -Recurse
-        # -Include *.exe,*.msi | Where FullName -match "tmp|packages"`)
-        # scanned the *entire* Craft root, which contains hundreds of
-        # unrelated .exe/.msi files (Craft's download cache, bundled
-        # third-party tool/redistributable installers, cmake.exe,
-        # python.exe, etc.) - many of which happen to live under folders
-        # literally named "tmp" or "packages". That filter matched those
-        # decoys and copied them into the release artifact, while the real
-        # CPack-built installer - which CMakeLists.txt/NextcloudCPack.cmake
-        # names "${APPLICATION_SHORTNAME}-${CPACK_PACKAGE_VERSION}-setup"
-        # (i.e. Files365-<version>-setup.exe) and which CPack drops directly
-        # in the nextcloud-client CMake build dir - does NOT contain "tmp"
-        # or "packages" in its path, so it was silently excluded. The build
-        # reported success and produced *some* .exe, but never the app's
-        # actual NSIS installer - hence "works in CI, errors on launch".
-        # Fixed by pointing at the known CPack output directory (same one
-        # windows-build-and-test.yml uses for ctest) and matching only the
-        # real installer's file name, then failing loudly if it's missing
-        # instead of silently uploading whatever else matched.
         shell: pwsh
         run: |
+          $packageLog = "${{ github.workspace }}\craft-package.log"
+
+          # makensis's own summary line, e.g.:
+          #   Output: "D:\...\windows-msvc2022_64-cl\tmp\nextcloud-client-latest-master-windows-cl-msvc2022-x86_64.exe"
+          $match = Select-String -Path $packageLog -Pattern 'Output:\s*"([^"]+\.exe)"' -ErrorAction SilentlyContinue | Select-Object -Last 1
+          if (-not $match) {
+            Write-Error "No NSIS 'Output: ...' line found in craft-package.log - packaging failed or its output format changed. Last 100 log lines:"
+            Get-Content $packageLog -Tail 100
+            exit 1
+          }
+
+          $installerPath = $match.Matches[0].Groups[1].Value
+          if (-not (Test-Path $installerPath)) {
+            Write-Error "craft-package.log reported the installer at '$installerPath' but that file does not exist."
+            exit 1
+          }
+
+          $installer = Get-Item $installerPath
+          $sizeMB = [math]::Round($installer.Length / 1MB, 1)
+          Write-Host "Found installer: $($installer.FullName) ($sizeMB MB)"
+          # A real NSIS installer for this app bundles Qt + all its
+          # dependencies and is tens of MB; anything tiny is almost
+          # certainly a truncated/corrupt build, not a working installer.
+          if ($installer.Length -lt 10MB) {
+            Write-Error "$($installer.Name) is only $sizeMB MB - looks truncated/corrupt, refusing to publish it."
+            exit 1
+          }
+
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-
-          $buildDir = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build"
-          if (-not (Test-Path $buildDir)) {
-            Write-Error "Expected CPack build directory not found: $buildDir"
-            exit 1
-          }
-
-          $installers = Get-ChildItem -Path $buildDir -Recurse -Include "Files365-*-setup.exe","Files365-*.msi" -ErrorAction SilentlyContinue
-          if (-not $installers) {
-            Write-Error "No Files365 installer found under $buildDir - CPack packaging likely failed silently."
-            exit 1
-          }
-
-          foreach ($installer in $installers) {
-            $sizeMB = [math]::Round($installer.Length / 1MB, 1)
-            Write-Host "Found installer: $($installer.FullName) ($sizeMB MB)"
-            # A real NSIS installer for this app bundles Qt + all its
-            # dependencies and is tens of MB; anything tiny is almost
-            # certainly a truncated/corrupt build, not a working installer.
-            if ($installer.Length -lt 10MB) {
-              Write-Error "$($installer.Name) is only $sizeMB MB - looks truncated/corrupt, refusing to publish it."
-              exit 1
-            }
-          }
-
-          $installers | Copy-Item -Destination dist -Force
+          # Re-named on copy so the artifact end users download is clearly
+          # labelled, independent of Craft's internal blueprint/branch/
+          # compiler-derived file name.
+          Copy-Item -Path $installer.FullName -Destination "dist\Files365-${{ steps.ver.outputs.version }}-setup.exe" -Force
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
