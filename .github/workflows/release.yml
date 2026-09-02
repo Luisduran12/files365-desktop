@@ -206,12 +206,54 @@ jobs:
           craft --package nextcloud-client
 
       - name: Collect installer(s)
+        # BUG FIXED: the previous filter (`-Path $env:CRAFT_TARGET -Recurse
+        # -Include *.exe,*.msi | Where FullName -match "tmp|packages"`)
+        # scanned the *entire* Craft root, which contains hundreds of
+        # unrelated .exe/.msi files (Craft's download cache, bundled
+        # third-party tool/redistributable installers, cmake.exe,
+        # python.exe, etc.) - many of which happen to live under folders
+        # literally named "tmp" or "packages". That filter matched those
+        # decoys and copied them into the release artifact, while the real
+        # CPack-built installer - which CMakeLists.txt/NextcloudCPack.cmake
+        # names "${APPLICATION_SHORTNAME}-${CPACK_PACKAGE_VERSION}-setup"
+        # (i.e. Files365-<version>-setup.exe) and which CPack drops directly
+        # in the nextcloud-client CMake build dir - does NOT contain "tmp"
+        # or "packages" in its path, so it was silently excluded. The build
+        # reported success and produced *some* .exe, but never the app's
+        # actual NSIS installer - hence "works in CI, errors on launch".
+        # Fixed by pointing at the known CPack output directory (same one
+        # windows-build-and-test.yml uses for ctest) and matching only the
+        # real installer's file name, then failing loudly if it's missing
+        # instead of silently uploading whatever else matched.
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Get-ChildItem -Path "${{ env.CRAFT_TARGET }}" -Recurse -Include *.exe,*.msi -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match "tmp|packages" } |
-            Copy-Item -Destination dist -Force
+
+          $buildDir = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build"
+          if (-not (Test-Path $buildDir)) {
+            Write-Error "Expected CPack build directory not found: $buildDir"
+            exit 1
+          }
+
+          $installers = Get-ChildItem -Path $buildDir -Recurse -Include "Files365-*-setup.exe","Files365-*.msi" -ErrorAction SilentlyContinue
+          if (-not $installers) {
+            Write-Error "No Files365 installer found under $buildDir - CPack packaging likely failed silently."
+            exit 1
+          }
+
+          foreach ($installer in $installers) {
+            $sizeMB = [math]::Round($installer.Length / 1MB, 1)
+            Write-Host "Found installer: $($installer.FullName) ($sizeMB MB)"
+            # A real NSIS installer for this app bundles Qt + all its
+            # dependencies and is tens of MB; anything tiny is almost
+            # certainly a truncated/corrupt build, not a working installer.
+            if ($installer.Length -lt 10MB) {
+              Write-Error "$($installer.Name) is only $sizeMB MB - looks truncated/corrupt, refusing to publish it."
+              exit 1
+            }
+          }
+
+          $installers | Copy-Item -Destination dist -Force
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
