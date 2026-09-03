@@ -291,19 +291,6 @@ jobs:
           # unlike Windows which uses lowercase APPLICATION_EXECUTABLE.
           lipo -info universal/Files365.app/Contents/MacOS/Files365
 
-      - name: Package (.dmg)
-        # Mirrors NextcloudCPack.cmake's DragNDrop settings (CPACK_DMG_FORMAT
-        # UDBZ, CPACK_DMG_VOLUME_NAME "${APPLICATION_SHORTNAME}") by hand,
-        # since CPack itself isn't usable here - it drives its own build+
-        # install from a single CMake tree and has no notion of a
-        # pre-merged, already-built universal .app to package as-is.
-        run: |
-          mkdir dmgroot build
-          cp -a universal/Files365.app dmgroot/
-          ln -s /Applications dmgroot/Applications
-          hdiutil create -volname Files365 -srcfolder dmgroot -format UDBZ -ov \
-                          "build/Files365-${{ steps.ver.outputs.version }}-macOS.dmg"
-
       - name: Re-sign app bundle (lipo invalidates the per-bundle signature seal)
         id: resign
         # `codesign --verify --deep --strict` fails with "a sealed resource
@@ -312,13 +299,23 @@ jobs:
         # invalidates the seal each one had from its original single-arch
         # build - on Apple Silicon that's not just a Gatekeeper warning, the
         # kernel refuses to load a binary whose signature doesn't match its
-        # contents. This is the exact same class of bug the single-arch
-        # build-macos job hit before (CPack's DragNDrop staging invalidating
-        # macdeployqt's signature after the fact) and the same proven fix:
-        # re-sign in place inside the already-built dmg (convert to a
-        # writable image, sign, convert back), verified by actually
-        # installing a real build's output, done here after packaging so
-        # every file the .dmg carries is already in its final place.
+        # contents. This is the same class of bug the single-arch build-macos
+        # job hit before (CPack's DragNDrop staging invalidating macdeployqt's
+        # signature after the fact), so re-sign after the last step that
+        # touches the bundle's files too - here, that's this job's own Merge
+        # step, since packaging below is a plain `cp -a` of the already-final
+        # universal/Files365.app with nothing added or rewritten afterwards.
+        #
+        # Signed here, directly on disk, rather than inside a mounted dmg
+        # (which is how the single-arch job did it, since CPack had already
+        # built the dmg by the time re-signing was possible there): a first
+        # attempt signing inside a mounted dmg hit "internal error in Code
+        # Signing subsystem" on libicudata.78.dylib (a ~65MB universal data
+        # blob, the largest single file in the merge) that a byte-identical
+        # local repro of the same codesign invocation outside a disk image
+        # did not reproduce - consistent with known flakiness in `--deep`
+        # signing large bundles over a mounted disk image on some macOS
+        # versions. Retried below as defense in depth regardless of cause.
         #
         # This is still only an ad-hoc signature (no paid Apple Developer ID
         # / notarization) - end users downloading the .dmg via a browser will
@@ -331,16 +328,35 @@ jobs:
         # decision for the maintainers.
         run: |
           set -e
-          DMG=$(ls build/Files365-*.dmg)
-          hdiutil convert "$DMG" -format UDRW -o build/rw.dmg
-          MOUNT=$(hdiutil attach build/rw.dmg -nobrowse -readwrite | tail -1 | awk -F'\t' '{print $NF}' | sed 's/[[:space:]]*$//')
-          APP=$(find "$MOUNT" -maxdepth 1 -name "*.app")
-          codesign --force --deep --sign - "$APP"
-          codesign --verify --deep --strict "$APP"
-          hdiutil detach "$MOUNT"
-          rm -f "$DMG"
-          hdiutil convert build/rw.dmg -format UDBZ -o "$DMG"
-          rm -f build/rw.dmg
+          for attempt in 1 2 3; do
+            if codesign --force --deep --sign - universal/Files365.app \
+               && codesign --verify --deep --strict universal/Files365.app; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "codesign failed 3 times, giving up" >&2
+              exit 1
+            fi
+            echo "codesign attempt $attempt failed, retrying..." >&2
+            sleep 5
+          done
+
+      - name: Package (.dmg)
+        # Mirrors NextcloudCPack.cmake's DragNDrop settings (CPACK_DMG_FORMAT
+        # UDBZ, CPACK_DMG_VOLUME_NAME "${APPLICATION_SHORTNAME}") by hand,
+        # since CPack itself isn't usable here - it drives its own build+
+        # install from a single CMake tree and has no notion of a
+        # pre-merged, already-built universal .app to package as-is. Comes
+        # after signing (unlike the equivalent single-arch/CPack step this
+        # replaced) since packaging here is just `cp -a` + a symlink, which
+        # doesn't touch universal/Files365.app's own contents and so can't
+        # invalidate a signature already on it.
+        run: |
+          mkdir dmgroot build
+          cp -a universal/Files365.app dmgroot/
+          ln -s /Applications dmgroot/Applications
+          hdiutil create -volname Files365 -srcfolder dmgroot -format UDBZ -ov \
+                          "build/Files365-${{ steps.ver.outputs.version }}-macOS.dmg"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
