@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       version: ${{ steps.ver.outputs.version }}
-      success: ${{ steps.package.outcome == 'success' }}
+      success: ${{ steps.resign.outcome == 'success' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -126,6 +126,48 @@ jobs:
       - name: Show preinstall log on failure
         if: failure()
         run: cat build/_CPack_Packages/unused/DragNDrop/PreinstallOutput.log
+
+      - name: Re-sign app bundle (CPack's DragNDrop staging invalidates macdeployqt's signature)
+        id: resign
+        # `codesign --verify --deep --strict` on the .dmg's .app fails with
+        # "a sealed resource is missing or invalid": CPack's DragNDrop
+        # generator copies/adds files into its own staging folder (DS_Store,
+        # the volume icon, the Applications symlink, plus re-laying-out the
+        # .app's own tree) *after* macdeployqt already signed the bundle
+        # during the Build step above, which invalidates that seal. On
+        # Apple Silicon an invalid signature isn't just a Gatekeeper
+        # warning - the kernel itself refuses to load a binary whose code
+        # signature doesn't match its contents, so the app cannot launch at
+        # all (confirmed: `codesign --verify --deep --strict` fails on a
+        # real built .dmg from this pipeline). Re-signing must happen after
+        # every file CPack adds is already in place, i.e. after packaging,
+        # not during the Build step.
+        #
+        # This is still only an ad-hoc signature (no paid Apple Developer ID
+        # / notarization) - end users downloading the .dmg via a browser will
+        # still see Gatekeeper's "Apple could not verify this app is free of
+        # malware" prompt (expected for any unsigned/ad-hoc app) and need to
+        # right-click > Open once. That's normal friction for unsigned
+        # freeware, not a bug - true zero-warning distribution requires
+        # enrolling in the Apple Developer Program and notarizing via
+        # notarytool, which is a separate decision or the maintainers.
+        #
+        # Re-signed in place inside the already-built dmg (convert to a
+        # writable image, sign, convert back to the original compressed
+        # format) rather than rebuilt from scratch, so CPACK_DMG_DS_STORE's
+        # custom Finder icon layout is preserved.
+        run: |
+          set -e
+          DMG=$(ls build/Files365-*.dmg)
+          hdiutil convert "$DMG" -format UDRW -o build/rw.dmg
+          MOUNT=$(hdiutil attach build/rw.dmg -nobrowse -readwrite | tail -1 | awk -F'\t' '{print $NF}' | sed 's/[[:space:]]*$//')
+          APP=$(find "$MOUNT" -maxdepth 1 -name "*.app")
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          hdiutil detach "$MOUNT"
+          rm -f "$DMG"
+          hdiutil convert build/rw.dmg -format UDBZ -o "$DMG"
+          rm -f build/rw.dmg
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -217,10 +259,27 @@ jobs:
           }
 
           craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|stable-34.0|"
-          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-nextcloud.git|stable-34.0|"
+          # Fork of craft-blueprints-nextcloud@stable-34.0, not upstream:
+          # upstream's nextcloud-client.py hardcodes createPackage()'s
+          # "appname" define and applicationExecutable to "nextcloud".
+          # Craft uses applicationExecutable to find the app's actual .exe
+          # when assembling the installer payload - since this fork's real
+          # binary is "files365.exe" (APPLICATION_EXECUTABLE in
+          # NEXTCLOUD.cmake), that lookup silently found nothing, so every
+          # DLL got bundled (those are collected generically) but the one
+          # binary a user needs to launch the app was missing from the
+          # installer entirely (confirmed by extracting a real build's .exe
+          # and checking its payload). This fork just exposes those two
+          # hardcoded strings as options - see
+          # https://github.com/Luisduran12/craft-blueprints-nextcloud/commit/1c9c2e6
+          craft --add-blueprint-repository "https://github.com/Luisduran12/craft-blueprints-nextcloud.git|stable-34.0-files365|"
           craft craft
           craft --install-deps nextcloud-client
-          craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} nextcloud-client
+          craft --src-dir ${{ github.workspace }} `
+                --options nextcloud-client.srcDir=${{ github.workspace }} `
+                --options nextcloud-client.appExecutable=files365 `
+                --options nextcloud-client.appName=files365 `
+                nextcloud-client
 
           # Tee (not just run) the packaging step: craft-blueprints-nextcloud's
           # createPackage() does NOT use this repo's NextcloudCPack.cmake/CPack
