@@ -114,13 +114,29 @@ jobs:
         # makes the bundle correct.
         run: cmake --build build --target nextcloud --target nextcloudcmd -j "$(sysctl -n hw.ncpu)"
 
+      - name: Archive app bundle (tar, not a raw directory)
+        # build/bin/Files365.app: BIN_OUTPUT_DIRECTORY (CMakeLists.txt) is
+        # "${CMAKE_BINARY_DIR}/bin", and the bundle is named after
+        # APPLICATION_NAME (NEXTCLOUD.cmake) - "Files365.app".
+        #
+        # actions/upload-artifact dereferences symlinks when uploading a
+        # directory path - confirmed by inspecting a real run's downloaded
+        # artifact: every .framework's Versions/Current (normally a symlink
+        # to Versions/A) came back as a second real copy of the directory,
+        # and each framework's top-level convenience symlinks (e.g.
+        # QtLabsPlatform -> Versions/Current/QtLabsPlatform) came back as
+        # duplicated real files. That non-standard layout is exactly what
+        # made codesign fail later with "bundle format is ambiguous (could
+        # be app or framework)" on QtLabsPlatform.framework. tar preserves
+        # symlinks natively, so archive the bundle into one file and upload
+        # that instead - the artifact transport can't mangle bytes inside an
+        # opaque tarball the way it mangles a directory tree.
+        run: tar -czf Files365.app.tar.gz -C build/bin Files365.app
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: files365-macos-app-arm64-${{ steps.ver.outputs.version }}
-          # build/bin/Files365.app: BIN_OUTPUT_DIRECTORY (CMakeLists.txt) is
-          # "${CMAKE_BINARY_DIR}/bin", and the bundle is named after
-          # APPLICATION_NAME (NEXTCLOUD.cmake) - "Files365.app".
-          path: build/bin/Files365.app
+          path: Files365.app.tar.gz
           retention-days: 1
           if-no-files-found: error
 
@@ -186,10 +202,15 @@ jobs:
         # built alongside nextcloud.
         run: cmake --build build --target nextcloud --target nextcloudcmd -j "$(sysctl -n hw.ncpu)"
 
+      - name: Archive app bundle (tar, not a raw directory)
+        # See build-macos-arm64's Archive step for why this must be a tar
+        # file rather than uploading build/bin/Files365.app as a directory.
+        run: tar -czf Files365.app.tar.gz -C build/bin Files365.app
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: files365-macos-app-x86_64-${{ steps.ver.outputs.version }}
-          path: build/bin/Files365.app
+          path: Files365.app.tar.gz
           retention-days: 1
           if-no-files-found: error
 
@@ -231,25 +252,26 @@ jobs:
           name: files365-macos-app-x86_64-${{ steps.ver.outputs.version }}
           path: x86_64_dl
 
-      - name: Normalize downloaded bundle layout
-        # actions/upload-artifact's handling of "does uploading a single
-        # directory path keep that directory's own name as a level in the
-        # artifact, or only its contents" isn't reliably documented, so
-        # don't depend on which one it does: after download, the bundle is
-        # either at <dl>/Files365.app/Contents/... already, or its contents
-        # landed directly at <dl>/Contents/... - detect which and normalize
-        # both into a plain arm64/Files365.app and x86_64/Files365.app.
+      - name: Extract app bundles
+        # Confirmed by inspecting a real run's download: actions/download-
+        # artifact (or upload-artifact on the way in) dereferences symlinks
+        # inside an uploaded directory, turning each .framework's
+        # Versions/Current (normally a symlink to Versions/A) into a second
+        # real copy of the directory, and top-level convenience symlinks
+        # (e.g. QtLabsPlatform -> Versions/Current/QtLabsPlatform) into
+        # duplicated real files - a non-standard bundle layout that made the
+        # later Re-sign step fail with "bundle format is ambiguous (could be
+        # app or framework)". build-macos-arm64/x86_64 now upload a tarball
+        # instead (tar preserves symlinks natively), so unpack that here.
         run: |
-          for arch in arm64 x86_64; do
-            if [ -d "${arch}_dl/Files365.app" ]; then
-              mv "${arch}_dl/Files365.app" "${arch}.app"
-            else
-              mv "${arch}_dl" "${arch}.app"
-            fi
-            mkdir "$arch"
-            mv "${arch}.app" "$arch/Files365.app"
-            test -f "$arch/Files365.app/Contents/Info.plist"
-          done
+          mkdir arm64 x86_64
+          tar -xzf arm64_dl/Files365.app.tar.gz -C arm64
+          tar -xzf x86_64_dl/Files365.app.tar.gz -C x86_64
+          test -f arm64/Files365.app/Contents/Info.plist
+          test -f x86_64/Files365.app/Contents/Info.plist
+          # Guard against this exact bug regressing silently.
+          test -L arm64/Files365.app/Contents/Frameworks/QtLabsPlatform.framework/Versions/Current
+          test -L x86_64/Files365.app/Contents/Frameworks/QtLabsPlatform.framework/Versions/Current
 
       - name: Merge into a universal2 .app (lipo)
         # admin/osx/make_universal.py is upstream Nextcloud's own script for
