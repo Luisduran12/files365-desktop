@@ -260,26 +260,21 @@ jobs:
 
           craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|stable-34.0|"
           # Fork of craft-blueprints-nextcloud@stable-34.0, not upstream:
-          # upstream's nextcloud-client.py hardcodes createPackage()'s
-          # "appname" define and applicationExecutable to "nextcloud".
-          # Craft uses applicationExecutable to find the app's actual .exe
-          # when assembling the installer payload - since this fork's real
-          # binary is "files365.exe" (APPLICATION_EXECUTABLE in
-          # NEXTCLOUD.cmake), that lookup silently found nothing, so every
-          # DLL got bundled (those are collected generically) but the one
-          # binary a user needs to launch the app was missing from the
-          # installer entirely (confirmed by extracting a real build's .exe
-          # and checking its payload). This fork just exposes those two
-          # hardcoded strings as options - see
-          # https://github.com/Luisduran12/craft-blueprints-nextcloud/commit/1c9c2e6
+          # upstream's nextcloud-client/blacklist.txt has a "strip most
+          # executables" rule - a negative-lookahead regex that deletes every
+          # .exe from the packaged installer except nextcloud/nextcloudcmd/
+          # QtWebEngineProcess. This fork's real binaries are files365.exe
+          # and files365cmd.exe (APPLICATION_EXECUTABLE in NEXTCLOUD.cmake),
+          # which never matched, so the app's own executable was silently
+          # dropped while every DLL still got bundled normally (matched by
+          # unrelated rules) - confirmed by extracting a real built
+          # installer's payload: 2167 files, zero of them .exe. This fork
+          # just adds files365/files365cmd to that regex's allowlist - see
+          # https://github.com/Luisduran12/craft-blueprints-nextcloud/commit/b99a3ce
           craft --add-blueprint-repository "https://github.com/Luisduran12/craft-blueprints-nextcloud.git|stable-34.0-files365|"
           craft craft
           craft --install-deps nextcloud-client
-          craft --src-dir ${{ github.workspace }} `
-                --options nextcloud-client.srcDir=${{ github.workspace }} `
-                --options nextcloud-client.appExecutable=files365 `
-                --options nextcloud-client.appName=files365 `
-                nextcloud-client
+          craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} nextcloud-client
 
           # Tee (not just run) the packaging step: craft-blueprints-nextcloud's
           # createPackage() does NOT use this repo's NextcloudCPack.cmake/CPack
