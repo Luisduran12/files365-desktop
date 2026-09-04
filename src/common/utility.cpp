@@ -153,10 +153,15 @@ static QLatin1String platform()
 
 QByteArray Utility::userAgentString()
 {
+    // The branding token here is intentionally "Nextcloud" rather than
+    // qApp->applicationName() ("Files365"): our own server's client-version
+    // gate matches on this token, independent of the app's visible identity
+    // (window titles, tray icon, Start Menu entry, etc. all still come from
+    // Theme/applicationName() and are unaffected by this).
     return QStringLiteral("Mozilla/5.0 (%1) mirall/%2 (%3, %4-%5 ClientArchitecture: %6 OsArchitecture: %7)")
         .arg(platform(),
             QStringLiteral(MIRALL_VERSION_STRING),
-            qApp->applicationName(),
+            QStringLiteral("Nextcloud"),
             QSysInfo::productType(),
             QSysInfo::kernelVersion(),
             QSysInfo::buildCpuArchitecture(),
