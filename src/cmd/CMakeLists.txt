@@ -37,8 +37,17 @@ if(NOT BUILD_LIBRARIES_ONLY)
   target_link_libraries(nextcloudcmd cmdCore nextcloudCore)
 
   if(BUILD_OWNCLOUD_OSX_BUNDLE)
+    # This binary lands in Contents/MacOS and links the two private dylibs as
+    # @rpath/lib${APPLICATION_EXECUTABLE}sync.0.dylib and
+    # @rpath/lib${APPLICATION_EXECUTABLE}_csync.0.dylib, which src/gui's POST_BUILD
+    # deploys into Contents/Frameworks -- so it needs that RPATH baked in.  Without
+    # BUILD_WITH_INSTALL_RPATH the only RPATH it gets is CMake's automatic build-tree
+    # one (an absolute path into this checkout's build/bin), which resolves on the
+    # build machine and nowhere else, so the shipped binary aborts at launch.
     set_target_properties(nextcloudcmd PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY "${BIN_OUTPUT_DIRECTORY}/${OWNCLOUD_OSX_BUNDLE}/Contents/MacOS")
+      RUNTIME_OUTPUT_DIRECTORY "${BIN_OUTPUT_DIRECTORY}/${OWNCLOUD_OSX_BUNDLE}/Contents/MacOS"
+      BUILD_WITH_INSTALL_RPATH TRUE
+      INSTALL_RPATH "@loader_path/../Frameworks")
   else()
     set_target_properties(nextcloudcmd PROPERTIES
       RUNTIME_OUTPUT_DIRECTORY ${BIN_OUTPUT_DIRECTORY})

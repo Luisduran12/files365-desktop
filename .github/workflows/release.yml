@@ -114,6 +114,15 @@ jobs:
         # makes the bundle correct.
         run: cmake --build build --target nextcloud --target nextcloudcmd -j "$(sysctl -n hw.ncpu)"
 
+      - name: Verify the bundle is self-contained
+        # Catches the class of bug where the bundle builds, packages, signs and
+        # uploads cleanly but aborts at launch on any machine that isn't this
+        # runner - a private dylib that never got deployed into
+        # Contents/Frameworks, or a binary still pointing at /usr/local/opt.
+        # Run per-arch, before the merge, so a failure names the arch that
+        # produced it. See admin/osx/verify_bundle.sh for what it checks.
+        run: bash admin/osx/verify_bundle.sh build/bin/Files365.app
+
       - name: Archive app bundle (tar, not a raw directory)
         # build/bin/Files365.app: BIN_OUTPUT_DIRECTORY (CMakeLists.txt) is
         # "${CMAKE_BINARY_DIR}/bin", and the bundle is named after
@@ -201,6 +210,10 @@ jobs:
         # See build-macos-arm64's Build step for why nextcloudcmd must be
         # built alongside nextcloud.
         run: cmake --build build --target nextcloud --target nextcloudcmd -j "$(sysctl -n hw.ncpu)"
+
+      - name: Verify the bundle is self-contained
+        # See build-macos-arm64's Verify step.
+        run: bash admin/osx/verify_bundle.sh build/bin/Files365.app
 
       - name: Archive app bundle (tar, not a raw directory)
         # See build-macos-arm64's Archive step for why this must be a tar
@@ -290,6 +303,15 @@ jobs:
           # OUTPUT_NAME is APPLICATION_NAME (capital F, src/gui/CMakeLists.txt),
           # unlike Windows which uses lowercase APPLICATION_EXECUTABLE.
           lipo -info universal/Files365.app/Contents/MacOS/Files365
+
+      - name: Verify the merged bundle
+        # Same check the two build jobs ran on their own output, re-run on the
+        # merged bundle: --universal additionally asserts every binary carries
+        # both arch slices, which make_universal.py cannot guarantee on its own
+        # - its per-file lipo runs under a bare `except` that prints and
+        # continues, so a failed merge leaves an arm64-only file behind and the
+        # script still exits 0.
+        run: bash admin/osx/verify_bundle.sh universal/Files365.app --universal
 
       - name: Re-sign app bundle (lipo invalidates the per-bundle signature seal)
         id: resign

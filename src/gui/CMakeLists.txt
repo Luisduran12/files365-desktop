@@ -788,8 +788,12 @@ if(BUILD_OWNCLOUD_OSX_BUNDLE AND NOT BUILD_LIBRARIES_ONLY)
     # macdeployqt (POST_BUILD) replaces the build-tree RPATH with @loader_path/../Frameworks.
     # Setting BUILD_WITH_INSTALL_RPATH prevents CMake from separately tracking the build-tree
     # RPATH and then trying to delete it at cmake --install time (which would fail because
-    # macdeployqt has already removed it).
-    set_target_properties(nextcloud PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
+    # macdeployqt has already removed it).  INSTALL_RPATH spells out the value rather than
+    # relying on macdeployqt to add it, so the @rpath/lib${APPLICATION_EXECUTABLE}sync.0.dylib
+    # reference resolves even if macdeployqt is skipped or fails.
+    set_target_properties(nextcloud PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "@loader_path/../Frameworks")
 
     get_target_property (QT_QMAKE_EXECUTABLE Qt::qmake IMPORTED_LOCATION)
     get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
@@ -810,18 +814,59 @@ if(BUILD_OWNCLOUD_OSX_BUNDLE AND NOT BUILD_LIBRARIES_ONLY)
         set(NO_STRIP "")
     endif()
 
+    # nextcloudcmd's binary is one of macdeployqt's inputs below, so it has to exist
+    # before this POST_BUILD runs.  Building both targets in one `cmake --build` does
+    # not guarantee that -- with -j they build in parallel -- and when macdeployqt loses
+    # the race it reports "install_name_tool: can't open file", carries on, and leaves
+    # ${cmd_NAME} with its Homebrew-absolute Qt dependencies untouched.
+    add_dependencies(nextcloud nextcloudcmd)
+
+    # The two private dylibs are built into BIN_OUTPUT_DIRECTORY, outside the bundle,
+    # and referenced by both executables as @rpath/lib<name>.0.dylib.  macdeployqt does
+    # not deploy them (it only handles Qt frameworks and dependencies it resolves to
+    # absolute paths) and CI packages build/bin/${OWNCLOUD_OSX_BUNDLE} directly instead
+    # of running cmake --install -- which is what would otherwise have copied them in --
+    # so without this the shipped bundle ships neither and dyld aborts at launch with
+    # "Library not loaded: @rpath/lib${APPLICATION_EXECUTABLE}sync.0.dylib".
+    #
+    # They are copied in *before* macdeployqt and handed to it as extra -executable
+    # inputs so that their own dependencies (Qt, OpenSSL, karchive, qtkeychain, libp11 --
+    # every one an absolute Homebrew path as linked) get deployed and rewritten to
+    # @loader_path/../Frameworks too.  Copying them afterwards would leave those absolute
+    # paths in place, which resolves on the build machine and on no user's machine.
+    #
+    # TARGET_SONAME_FILE is the versioned name the install_name actually points at
+    # (lib<name>.0.dylib, itself a symlink in the build tree to the fully versioned
+    # file); cmake -E copy follows it, so Contents/Frameworks gets one real file under
+    # the exact name dyld looks up, with no symlink for the packaging step to mangle.
+    set(BUNDLE_FRAMEWORKS_DIR "$<TARGET_FILE_DIR:nextcloud>/../Frameworks")
+    set(SYNC_DYLIB_NAME "$<TARGET_SONAME_FILE_NAME:nextcloudsync>")
+    set(CSYNC_DYLIB_NAME "$<TARGET_SONAME_FILE_NAME:nextcloud_csync>")
+
     add_custom_command(TARGET nextcloud POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${BUNDLE_FRAMEWORKS_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_SONAME_FILE:nextcloudsync>"
+        "${BUNDLE_FRAMEWORKS_DIR}/${SYNC_DYLIB_NAME}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_SONAME_FILE:nextcloud_csync>"
+        "${BUNDLE_FRAMEWORKS_DIR}/${CSYNC_DYLIB_NAME}"
         COMMAND "${MACDEPLOYQT_EXECUTABLE}"
         "$<TARGET_FILE_DIR:nextcloud>/../.."
         -qmldir=${CMAKE_SOURCE_DIR}/src/gui
         -always-overwrite
-        -executable="$<TARGET_FILE_DIR:nextcloud>/${cmd_NAME}"
+        # Quoted as a whole argument, not as -executable="..." -- the inner quotes are
+        # not shell quotes here, they end up as literal characters in the path handed
+        # to macdeployqt, which then silently skips a file it cannot open.
+        "-executable=$<TARGET_FILE_DIR:nextcloud>/${cmd_NAME}"
+        "-executable=${BUNDLE_FRAMEWORKS_DIR}/${SYNC_DYLIB_NAME}"
+        "-executable=${BUNDLE_FRAMEWORKS_DIR}/${CSYNC_DYLIB_NAME}"
         -libpath=${MACDEPLOYQT_LIB_DIR}
         -libpath=${BIN_OUTPUT_DIRECTORY}
         ${NO_STRIP}
         COMMAND "${CMAKE_COMMAND}"
         -E rm -rf "${BIN_OUTPUT_DIRECTORY}/${OWNCLOUD_OSX_BUNDLE}/Contents/PlugIns/bearer"
-        COMMENT "Running macdeployqt..."
+        COMMENT "Deploying private dylibs and running macdeployqt..."
     )
 endif()
 

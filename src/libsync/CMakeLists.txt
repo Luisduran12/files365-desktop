@@ -298,9 +298,17 @@ if(BUILD_OWNCLOUD_OSX_BUNDLE)
     # the nextcloud executable's @rpath reference to that absolute path during
     # install -- a path nothing is ever installed to -- causing dyld to fail at
     # launch with "Library not loaded: .../build/.../lib/libnextcloudsync.0.dylib".
+    #
+    # INSTALL_RPATH is needed because this dylib links
+    # @rpath/lib${APPLICATION_EXECUTABLE}_csync.0.dylib: "@loader_path/../Frameworks"
+    # resolves it inside the bundle (src/gui's POST_BUILD copies both dylibs into
+    # Contents/Frameworks) and "@loader_path" resolves it in the build tree, where
+    # the two sit next to each other in BIN_OUTPUT_DIRECTORY -- that second entry
+    # is what keeps the unit tests runnable straight out of build/bin.
     set_target_properties(nextcloudsync PROPERTIES
         BUILD_WITH_INSTALL_RPATH TRUE
         INSTALL_NAME_DIR "@rpath"
+        INSTALL_RPATH "@loader_path/../Frameworks;@loader_path"
     )
 endif()
 
