@@ -44,11 +44,20 @@ fail() {
     failures=$((failures + 1))
 }
 
-# otool prints the dependency list once per architecture slice, so every read of
-# it here is deduplicated.
+# otool repeats its output once per architecture slice, so every read of it here
+# is deduplicated.  It also labels each slice with a header line - "<path>:" for
+# a thin file, "<path> (architecture arm64):" for each slice of a fat one - and
+# those are dropped by matching the trailing colon, which no dependency path or
+# install name ever ends in.  Skipping a fixed number of leading lines instead
+# would leave every slice header after the first looking like a dependency on
+# the file's own absolute build-machine path: a false positive that shows up
+# only on universal binaries, which is to say only after the lipo merge.
+strip_slice_headers() {
+    grep -v ':$'
+}
 
 deps_of() {
-    otool -L "$1" | tail -n +2 | awk '{print $1}' | sort -u
+    otool -L "$1" | strip_slice_headers | awk '{print $1}' | sort -u
 }
 
 rpaths_of() {
@@ -57,7 +66,7 @@ rpaths_of() {
 
 own_id_of() {
     # Empty for executables, which have no LC_ID_DYLIB.
-    otool -D "$1" | tail -n +2 | head -1
+    otool -D "$1" | strip_slice_headers | head -1
 }
 
 # Collapses the ".." segments that come from expanding an RPATH such as
