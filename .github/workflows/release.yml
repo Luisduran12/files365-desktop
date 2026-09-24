@@ -528,7 +528,14 @@ jobs:
           # mirall/0.0.0, which the server's minimum-client-version gate
           # rejects as unsupported. The macOS jobs above don't need this
           # because they invoke cmake directly with the same flag.
-          craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} --options nextcloud-client.releaseVersion=${{ steps.ver.outputs.version }} nextcloud-client
+          #
+          # No --src-dir here: craft-core's DirSource.sourceDir() reads either
+          # [ContinuousIntegration]SourceDir (what --src-dir sets) or the
+          # blueprint's own srcDir option, preferring the former and warning
+          # that it is deprecated and "will soon be removed". Both were being
+          # passed with the same value, so the deprecated one only picked which
+          # branch computed an identical path.
+          craft --options nextcloud-client.srcDir=${{ github.workspace }} --options nextcloud-client.releaseVersion=${{ steps.ver.outputs.version }} nextcloud-client
 
           # Tee (not just run) the packaging step: craft-blueprints-nextcloud's
           # createPackage() does NOT use this repo's NextcloudCPack.cmake/CPack
