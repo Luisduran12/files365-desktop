@@ -7,11 +7,47 @@
 #
 # The release workflow (.github/workflows/release.yml) passes
 # -DFILES365_RELEASE_VERSION=X.Y.Z, derived from the pushed git tag
-# (e.g. tag "v1.0.0" -> "1.0.0"). Manual/local/dev builds that don't
-# pass it fall back to version 0.0.0-dev.
+# (e.g. tag "v1.0.0" -> "1.0.0"). It reaches cmake directly on macOS and
+# through Craft on Windows (--options nextcloud-client.releaseVersion).
+# Local builds that don't pass it fall back to 0.0.0-dev.
+#
+# That fallback is not cosmetic. The version lands in the client's
+# User-Agent as mirall/<version>, and Nextcloud's BlockLegacyClientPlugin
+# rejects anything below minimum.supported.desktop.version at the DAV layer
+# with "This version of the client is unsupported". v3.4.3 shipped exactly
+# that way, because the Windows build never received the flag and degraded
+# to 0.0.0 without a word. The gates below make that failure loud.
 # ------------------------------------
+set(FILES365_DEV_VERSION "0.0.0-dev")
+
 if(DEFINED FILES365_RELEASE_VERSION AND NOT FILES365_RELEASE_VERSION STREQUAL "")
-    string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" _files365_ver_match "${FILES365_RELEASE_VERSION}")
+    if(FILES365_RELEASE_VERSION STREQUAL FILES365_DEV_VERSION)
+        set(_files365_ver_match "")
+    else()
+        # Anchored at both ends on purpose: an unanchored match let
+        # "0.0.0-dev" and friends silently truncate to a valid-looking version.
+        string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$" _files365_ver_match "${FILES365_RELEASE_VERSION}")
+        if(NOT _files365_ver_match)
+            message(FATAL_ERROR
+                "FILES365_RELEASE_VERSION is '${FILES365_RELEASE_VERSION}', which is not X.Y.Z. "
+                "Refusing to fall back to ${FILES365_DEV_VERSION}: a client reporting mirall/0.0.0 is "
+                "rejected by Nextcloud servers. Pass a plain X.Y.Z, or '${FILES365_DEV_VERSION}' for a "
+                "deliberate dev build.")
+        endif()
+    endif()
+elseif("$ENV{GITHUB_REF_TYPE}" STREQUAL "tag")
+    # Read from the environment rather than a cache variable so this covers
+    # both the direct cmake call (macOS) and the Craft-driven one (Windows),
+    # which inherits the runner's environment.
+    message(FATAL_ERROR
+        "Tag build '$ENV{GITHUB_REF_NAME}' never received FILES365_RELEASE_VERSION, so the client "
+        "would ship as ${FILES365_DEV_VERSION} and be rejected by Nextcloud servers. macOS jobs pass "
+        "-DFILES365_RELEASE_VERSION; Windows passes it through Craft with "
+        "--options nextcloud-client.releaseVersion=<version>.")
+else()
+    message(WARNING
+        "FILES365_RELEASE_VERSION not set - building as ${FILES365_DEV_VERSION}. This build reports "
+        "mirall/0.0.0 and Nextcloud servers will refuse to sync with it. Local development only.")
 endif()
 
 if(_files365_ver_match)
@@ -22,9 +58,6 @@ if(_files365_ver_match)
         set(MIRALL_VERSION_SUFFIX "")
     endif()
 else()
-    if(DEFINED FILES365_RELEASE_VERSION AND NOT FILES365_RELEASE_VERSION STREQUAL "")
-        message(WARNING "FILES365_RELEASE_VERSION '${FILES365_RELEASE_VERSION}' is not in X.Y.Z format, falling back to 0.0.0-dev")
-    endif()
     set(MIRALL_VERSION_MAJOR 0)
     set(MIRALL_VERSION_MINOR 0)
     set(MIRALL_VERSION_PATCH 0)

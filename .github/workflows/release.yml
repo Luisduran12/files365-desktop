@@ -123,6 +123,28 @@ jobs:
         # produced it. See admin/osx/verify_bundle.sh for what it checks.
         run: bash admin/osx/verify_bundle.sh build/bin/Files365.app
 
+      - name: Verify the client reports the release version
+        # Regression gate for the mirall/0.0.0 bug that shipped in v3.4.3.
+        # The version travels VERSION.cmake -> version.h -> the User-Agent,
+        # where Nextcloud's BlockLegacyClientPlugin compares it against
+        # minimum.supported.desktop.version and 403s anything lower - so a
+        # build that silently lost its version produces an installer that
+        # cannot sync with any server. Asking the binary what version it
+        # thinks it is beats grepping strings out of it: bundled third-party
+        # libs (ICU, glib) carry "0.0.0" of their own, so a raw scan both
+        # false-positives and answers the wrong question.
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          cmd="build/bin/Files365.app/Contents/MacOS/files365cmd"
+          [ -x "$cmd" ] || cmd="build/bin/files365cmd"
+          reported="$("$cmd" --version | head -1)"
+          echo "$reported"
+          case "$reported" in
+            *"version ${{ steps.ver.outputs.version }}"*) ;;
+            *) echo "::error::expected version ${{ steps.ver.outputs.version }}, got: $reported"; exit 1 ;;
+          esac
+
       - name: Archive app bundle (tar, not a raw directory)
         # build/bin/Files365.app: BIN_OUTPUT_DIRECTORY (CMakeLists.txt) is
         # "${CMAKE_BINARY_DIR}/bin", and the bundle is named after
@@ -214,6 +236,20 @@ jobs:
       - name: Verify the bundle is self-contained
         # See build-macos-arm64's Verify step.
         run: bash admin/osx/verify_bundle.sh build/bin/Files365.app
+
+      - name: Verify the client reports the release version
+        # See build-macos-arm64's Verify step for what this guards against.
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          cmd="build/bin/Files365.app/Contents/MacOS/files365cmd"
+          [ -x "$cmd" ] || cmd="build/bin/files365cmd"
+          reported="$("$cmd" --version | head -1)"
+          echo "$reported"
+          case "$reported" in
+            *"version ${{ steps.ver.outputs.version }}"*) ;;
+            *) echo "::error::expected version ${{ steps.ver.outputs.version }}, got: $reported"; exit 1 ;;
+          esac
 
       - name: Archive app bundle (tar, not a raw directory)
         # See build-macos-arm64's Archive step for why this must be a tar
@@ -513,6 +549,33 @@ jobs:
           python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c --package nextcloud-client 2>&1 |
             Tee-Object -FilePath "${{ github.workspace }}\craft-package.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify the client reports the release version
+        # Same regression gate as build-macos-arm64's Verify step - see there
+        # for what shipping mirall/0.0.0 costs. Reads the PE version resource
+        # rather than running the binary: the exe in the craft tree needs its
+        # whole DLL set resolved to start, and a spurious launch failure would
+        # be indistinguishable from a real version regression.
+        #
+        # Placed before Collect (not after) so a bad build never reaches
+        # steps.collect, which is what this job reports as its success output
+        # and what the publish job gates on.
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          $exe = Get-ChildItem -Path "${{ github.workspace }}\${{ env.CRAFT_TARGET }}" -Recurse `
+                               -Filter files365.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "files365.exe not found under the craft tree - cannot verify the built version."
+            exit 1
+          }
+          $fileVersion = $exe.VersionInfo.FileVersion
+          Write-Host "$($exe.FullName) -> FileVersion '$fileVersion'"
+          if ([string]::IsNullOrWhiteSpace($fileVersion) -or -not $fileVersion.StartsWith($ver)) {
+            Write-Error "expected FileVersion to start with '$ver', got '$fileVersion'. The build lost its version - check that --options nextcloud-client.releaseVersion reached Craft."
+            exit 1
+          }
 
       - name: Collect installer(s)
         id: collect
