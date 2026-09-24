@@ -485,7 +485,14 @@ jobs:
           craft --add-blueprint-repository "https://github.com/Luisduran12/craft-blueprints-nextcloud.git|stable-34.0-files365|"
           craft craft
           craft --install-deps nextcloud-client
-          craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} nextcloud-client
+          # nextcloud-client.releaseVersion feeds -DFILES365_RELEASE_VERSION
+          # through to CMake (see craft-blueprints-nextcloud's
+          # nextcloud-client.py) - without it VERSION.cmake falls back to
+          # 0.0.0-dev and the installed client's User-Agent reports
+          # mirall/0.0.0, which the server's minimum-client-version gate
+          # rejects as unsupported. The macOS jobs above don't need this
+          # because they invoke cmake directly with the same flag.
+          craft --src-dir ${{ github.workspace }} --options nextcloud-client.srcDir=${{ github.workspace }} --options nextcloud-client.releaseVersion=${{ steps.ver.outputs.version }} nextcloud-client
 
           # Tee (not just run) the packaging step: craft-blueprints-nextcloud's
           # createPackage() does NOT use this repo's NextcloudCPack.cmake/CPack
