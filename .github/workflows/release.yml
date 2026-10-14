@@ -164,7 +164,7 @@ jobs:
         # opaque tarball the way it mangles a directory tree.
         run: tar -czf Files365.app.tar.gz -C build/bin Files365.app
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: files365-macos-app-arm64-${{ steps.ver.outputs.version }}
           path: Files365.app.tar.gz
@@ -256,7 +256,7 @@ jobs:
         # file rather than uploading build/bin/Files365.app as a directory.
         run: tar -czf Files365.app.tar.gz -C build/bin Files365.app
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: files365-macos-app-x86_64-${{ steps.ver.outputs.version }}
           path: Files365.app.tar.gz
@@ -416,7 +416,7 @@ jobs:
           hdiutil create -volname Files365 -srcfolder dmgroot -format UDBZ -ov \
                           "build/Files365-${{ steps.ver.outputs.version }}-macOS.dmg"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: files365-macos-${{ steps.ver.outputs.version }}
           path: build/Files365-*.dmg
@@ -622,7 +622,7 @@ jobs:
           # compiler-derived file name.
           Copy-Item -Path $installer.FullName -Destination "dist\Files365-${{ steps.ver.outputs.version }}-setup.exe" -Force
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: files365-windows-${{ steps.ver.outputs.version }}
           path: dist/*
